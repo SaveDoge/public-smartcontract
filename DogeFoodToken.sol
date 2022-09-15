@@ -356,6 +356,7 @@ contract ERC20 is Context, IERC20, IERC20Metadata {
      * @dev Moves tokens `amount` from `sender` to `recipient`.
      *
      * This is internal function is equivalent to {transfer}, and can be used to
+     * e.g. implement automatic token fees, slashing mechanisms, etc.
      *
      * Emits a {Transfer} event.
      *
@@ -547,17 +548,22 @@ abstract contract Ownable is Context {
     }
 }
 
-contract DogeFoodTest is ERC20Burnable, Ownable {
+contract SaveDoge is ERC20Burnable, Ownable {
     using SafeMath for uint256;
 
+    mapping(address => bool) public isExcludedFromFee;
     mapping(address => bool) public isMinter;
+    mapping(address => bool) public whiteListedPair;
 
     uint256 immutable public MAX_SUPPLY;
-
+    uint256 public BUY_FEE = 0;
+    uint256 public SELL_FEE = 500;
 
     address payable public developmentAddress;
 
     event TokenRecoverd(address indexed _user, uint256 _amount);
+    event FeeUpdated(address indexed _user, bool _feeType, uint256 _fee);
+    event ToggleV2Pair(address indexed _user, address indexed _pair, bool _flag);
     event AddressExcluded(address indexed _user, address indexed _account, bool _flag);
     event MinterRoleAssigned(address indexed _user, address indexed _account);
     event MinterRoleRevoked(address indexed _user, address indexed _account);
@@ -565,9 +571,11 @@ contract DogeFoodTest is ERC20Burnable, Ownable {
     constructor(string memory __name, string memory __symbol, uint256 _maxSupply, uint256 _initialSupply) ERC20(__name, __symbol){
 
         require(_initialSupply <= _maxSupply,
-                    "DogeFoodTest: _initialSupply should be less then _maxSupply");
+                    "SaveDoge: _initialSupply should be less then _maxSupply");
         
         MAX_SUPPLY = _maxSupply;
+        isExcludedFromFee[owner()] = true;
+        isExcludedFromFee[address(this)] = true;
 
         if(_initialSupply > 0) {
             _mint(_msgSender(), _initialSupply);
@@ -576,7 +584,7 @@ contract DogeFoodTest is ERC20Burnable, Ownable {
 
     modifier hasMinterRole () {
         require(isMinter[_msgSender()],
-                "DogeFoodTest: Permission Denied!!!");
+                "SaveDoge: Permission Denied!!!");
         _;
     }
     /************************************************************************/
@@ -587,7 +595,36 @@ contract DogeFoodTest is ERC20Burnable, Ownable {
 
         uint256 senderBalance = _balances[sender];
         require(senderBalance >= amount, "ERC20: transfer amount exceeds balance");
-        emit Transfer(sender, recipient, amount);
+
+        uint256 fee;
+
+        if (whiteListedPair[sender]) {
+            fee = BUY_FEE;
+        } else if (whiteListedPair[recipient]) {
+            fee = SELL_FEE;
+        }
+
+        if ((isExcludedFromFee[sender] || isExcludedFromFee[recipient]) ||
+                (!whiteListedPair[sender] && !whiteListedPair[recipient])) {
+            fee = 0;
+        }
+        
+        uint256 feeAmount = amount.mul(fee).div(10000);
+
+        if (feeAmount > 0) {
+            if (developmentAddress == address(0x0)) {
+                _totalSupply -= feeAmount;
+            } else {
+                _balances[developmentAddress] += feeAmount;
+            }
+
+            emit Transfer(sender, developmentAddress, feeAmount);
+        }
+
+        _balances[sender] = senderBalance - amount;
+        _balances[recipient] = _balances[recipient] + amount - feeAmount;
+
+        emit Transfer(sender, recipient, amount - feeAmount);
     }
 
 
@@ -595,7 +632,7 @@ contract DogeFoodTest is ERC20Burnable, Ownable {
 
     function mint(address _user, uint256 _amount) external hasMinterRole {
         require(_totalSupply.add(_amount) <= MAX_SUPPLY,
-                    "DogeFoodTest: No more Minting is allowed!!!");
+                    "SaveDoge: No more Minting is allowed!!!");
                     
         _mint(_user, _amount);
     }
@@ -617,13 +654,61 @@ contract DogeFoodTest is ERC20Burnable, Ownable {
         emit MinterRoleRevoked(_msgSender(), _account);
     }
 
+    function excludeMultipleAccountsFromFees(
+        address[] calldata _accounts,
+        bool _excluded
+    ) external onlyOwner {
+        for (uint256 i = 0; i < _accounts.length; i++) {
+            isExcludedFromFee[_accounts[i]] = _excluded;
+
+            emit AddressExcluded(_msgSender(), _accounts[i], _excluded);
+        }
+    }
+
+    function enableV2PairFee(
+        address _account,
+        bool _flag
+    ) external onlyOwner {
+        whiteListedPair[_account] = _flag;
+
+        emit ToggleV2Pair(_msgSender(), _account, _flag);
+    }
+
+    function updateDevAddress(
+        address payable _dev
+    ) external onlyOwner {
+        isExcludedFromFee[developmentAddress] = false;
+        emit AddressExcluded(_msgSender(), developmentAddress, false);
+
+        developmentAddress = _dev;
+        isExcludedFromFee[developmentAddress] = true;
+
+        emit AddressExcluded(_msgSender(), developmentAddress, true);
+    }
+
+    function updateFee(
+        bool feeType, 
+        uint256 fee
+    ) external onlyOwner {
+        require(fee <= 1000,
+                "SaveDoge: Fee cannot be more then 10%");
+
+        if (feeType) { // TRUE == BUY FEE
+            BUY_FEE = fee;
+        } else { // FALSE == SELL FEE
+            SELL_FEE = fee;
+        }
+
+        emit FeeUpdated(_msgSender(), feeType, fee);
+    }
+
     function recoverToken(
         address _token
     ) external onlyOwner {
         uint256 tokenBalance = IERC20(_token).balanceOf(address(this));
         
         require(tokenBalance > 0, 
-                "DogeFoodTest: Contract doen't have token to be recovered!!!");
+                "SaveDoge: Contract doen't have token to be recovered!!!");
 
         IERC20(_token).transfer(owner(), tokenBalance);
 
