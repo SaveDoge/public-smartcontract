@@ -97,8 +97,6 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
     constructor(
         IDogeFoodToken _dogeFood,
-        address _boosterNFT,
-        uint256 _boosterRate,
         uint256 _dogeFoodPerBlock,
         uint256 _startBlock,
         uint256 _endBlock,
@@ -116,7 +114,6 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
         // boosterRate should be in 2 decimal.
         // for example, if we want to set 1% then pass _boosterRate as 100
-        nftBoostRate[_boosterNFT] = _boosterRate;
     }
 
     /* ========== NFT View Functions ========== */
